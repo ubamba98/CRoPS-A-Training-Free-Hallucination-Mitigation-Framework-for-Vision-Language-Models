@@ -14,6 +14,8 @@ from constants.crops_constants import (
     DEFAULT_MINIMUM_TEXT_TOKENS
 )
 
+from constants.image_token_constants import BACKBONE_IMAGE_TOKEN_IDS
+
 from constants.default_generation_constants import (
     DEFAULT_MAX_NEW_TOKENS,
     DEFAULT_TEMPERATURE,
@@ -156,7 +158,8 @@ def run_chair_benchmark(model, processor, args):
                         return_tensors="pt"
                     ).to(distributed_state.device, torch.bfloat16)
 
-            image_tokens = np.where(inputs["input_ids"].cpu().numpy()==32000)[1]
+            image_token_ids = BACKBONE_IMAGE_TOKEN_IDS[args.model_name]
+            image_tokens = np.where(inputs["input_ids"].cpu().numpy()==image_token_ids)[1]
             generation_config = GenerationConfigCRoPS(
                 max_new_tokens=args.max_new_tokens,
                 top_p=args.top_p,
