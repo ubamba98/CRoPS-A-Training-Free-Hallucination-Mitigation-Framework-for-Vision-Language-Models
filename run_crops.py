@@ -175,7 +175,7 @@ def run_chair_benchmark(model, processor, args):
                 alpha_stat_bias=args.alpha_stat_bias,
                 beta_cutoff=args.beta_cutoff,
                 max_threshold_plausibility_constraint=args.max_threshold_plausibility_constraint,
-                use_cache=False,
+                use_cache=True,
             )
 
             output_ids = model.generate(**inputs, generation_config=generation_config)

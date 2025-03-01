@@ -1,4 +1,5 @@
 import math
+import copy
 from typing import Optional, Union
 
 import torch
@@ -93,7 +94,7 @@ def crops_sample(
     key_position = generation_config.key_position
 
     # Lang Prior
-    model_kwargs_lang_prior = model_kwargs.copy()
+    model_kwargs_lang_prior = copy.deepcopy(model_kwargs)
     input_ids_lang_prior = generation_config.input_ids_lang_prior
     lambda_lang_prior = generation_config.lambda_lang_prior
 
@@ -101,7 +102,7 @@ def crops_sample(
     model_kwargs_lang_prior["attention_mask"] = torch.ones_like(input_ids_lang_prior)
 
     # Stat Bias
-    model_kwargs_stat_bias = model_kwargs.copy()
+    model_kwargs_stat_bias = copy.deepcopy(model_kwargs)
     alpha_stat_bias = generation_config.alpha_stat_bias
 
     # Other
