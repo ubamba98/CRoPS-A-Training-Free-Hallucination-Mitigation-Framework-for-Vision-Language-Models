@@ -32,7 +32,7 @@ def args_parser():
     parser.add_argument("--load_in_4bit", action='store_true', default=False)
 
     # Generation config
-    parser.add_argument("--do_sample", action='store_true',  default=True)
+    parser.add_argument("--do_sample", action='store_true', default=False)
     parser.add_argument("--max_new_tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     parser.add_argument("--top_p", type=float, default=DEFAULT_TOP_P)
@@ -43,7 +43,7 @@ def args_parser():
     parser.add_argument("--experiment_name", type=str, required=True)
 
     # Chair benchmark config
-    parser.add_argument("--run_chair_benchmark", action='store_true',  default=True)
+    parser.add_argument("--run_chair_benchmark", action='store_true', default=False)
     parser.add_argument("--coco_path", type=str, default='dataset/annotations')
     parser.add_argument("--coco_file", type=str, default='instances_val2014.json')
     parser.add_argument("--coco_base_image_path", type=str, default='dataset/val2014')
@@ -63,6 +63,8 @@ def main():
     elif args.load_in_4bit:
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
         )
     else:
         bnb_config = None
