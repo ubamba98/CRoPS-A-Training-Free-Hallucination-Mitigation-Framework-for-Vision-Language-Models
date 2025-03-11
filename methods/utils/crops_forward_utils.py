@@ -126,7 +126,7 @@ class GetAttentionMaskwithFastVandTextMask:
             if cumulative_sum >= 0.1:
                 break 
 
-        # top_attention_rank_index = torch.tensor(selected_indices)
+        top_attention_rank_index = torch.tensor(selected_indices)
 
         # generate text mask
         text_mask = torch.ones_like(self._attention_mask)
