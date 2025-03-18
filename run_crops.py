@@ -24,7 +24,7 @@ from constants.default_generation_constants import (
 )
 
 from benchmark.chair_benchmark import ChairBenchmarkDataset
-from benchmark.evaluators.mme.utils import MMEDataset,parse_pred_ans,eval_type_dict
+from benchmark.evaluators.mme.utils import parse_pred_ans,eval_type_dict
 from utils.reproducibility_util import set_reproducibility
 
 from collections import defaultdict
@@ -35,7 +35,6 @@ import gc
 import json
 import argparse
 import numpy as np
-from PIL import Image
 from tqdm.auto import tqdm
 from accelerate import PartialState
 from accelerate.utils import gather_object
