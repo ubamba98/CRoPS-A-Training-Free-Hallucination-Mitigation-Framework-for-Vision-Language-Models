@@ -123,6 +123,7 @@ def main():
 
 def run_mme_benchmark(model, processor, args):
     experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS", "MME")
+    os.makedirs(experiment_name, exist_ok=True)
 
     mme_dataset = load_dataset("darkyarding/MME")["test"]
     
@@ -130,7 +131,7 @@ def run_mme_benchmark(model, processor, args):
     
     with distributed_state.split_between_processes(data_list) as process_data_list:
         results = []
-        for sample in tqdm(process_data_list, total=len(process_data_list)):
+        for sample in tqdm(process_data_list, total=len(process_data_list), desc=f"Running Chair Benchmark. Process: {distributed_state.process_index}"):
             question_id = sample["question_id"]
             category = sample["category"]
             question = sample["question"]
