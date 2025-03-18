@@ -121,217 +121,128 @@ def main():
     if args.run_mme_benchmark:
         run_mme_benchmark(model,processor,args)
 
-def run_mme_benchmark(model,processor,args):
+def run_mme_benchmark(model, processor, args):
     experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS", "MME")
 
-    ds = load_dataset("darkyarding/MME")
-    ds  = ds['test']
-    mme_dataset = MMEDataset(ds = ds)
+    mme_dataset = load_dataset("darkyarding/MME")["test"]
+    
+    data_list = list(mme_dataset)
+    
+    with distributed_state.split_between_processes(data_list) as process_data_list:
+        results = []
+        for sample in tqdm(process_data_list, total=len(process_data_list)):
+            question_id = sample["question_id"]
+            category = sample["category"]
+            question = sample["question"]
+            gt_ans = sample["answer"].lower()
+            
+            conversation_lang_prior = [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."}
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": question}],
+                },
+            ]
+
+            conversation = [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."}
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "url": sample["image"]},
+                        {"type": "text", "text": question},
+                    ],
+                },
+            ]
+            
+            inputs = processor.apply_chat_template(
+                conversation,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt"
+            ).to(distributed_state.device, torch.bfloat16)
+            
+            input_ids_lang_prior = processor.apply_chat_template(
+                conversation_lang_prior,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt"
+            ).to(distributed_state.device, torch.bfloat16)["input_ids"]
+            
+            image_token_ids = BACKBONE_IMAGE_TOKEN_IDS[args.model_name]
+            image_tokens = np.where(inputs["input_ids"].cpu().numpy() == image_token_ids)[1]
+
+            generation_config = GenerationConfigContrastive(
+                max_new_tokens=args.max_new_tokens,
+                top_p=args.top_p,
+                temperature=args.temperature,
+                do_sample=args.do_sample,
+                key_position={
+                    "image_start": image_tokens[0],
+                    "image_end": image_tokens[-1],
+                },
+                input_ids_lang_prior=input_ids_lang_prior,
+                aggregate_layer_fast_v=args.aggregate_layer_fast_v,
+                minumum_fast_v_tokens=args.minumum_fast_v_tokens,
+                aggregate_layer_text_mask=args.aggregate_layer_text_mask,
+                minimum_text_tokens=args.minimum_text_tokens,
+                lambda_lang_prior=args.lambda_lang_prior,
+                alpha_stat_bias=args.alpha_stat_bias,
+                beta_cutoff=args.beta_cutoff,
+                max_threshold_plausibility_constraint=args.max_threshold_plausibility_constraint,
+                use_cache=True,
+            )
+            
+            with torch.no_grad():
+                output_ids = model.generate(**inputs, generation_config=generation_config)
+            output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)
+            pred_ans = parse_pred_ans(output_text)
+            
+            results.append({
+                "question_id": question_id,
+                "category": category,
+                "pred_ans": pred_ans,
+                "gt_ans": gt_ans
+            })
+            
+            del output_ids, inputs, input_ids_lang_prior
+            torch.cuda.empty_cache()
+            gc.collect()
 
     question_pairs = defaultdict(list)
-    for sample in tqdm(mme_dataset,total = len(mme_dataset)):
-        question_pairs[sample["question_id"]].append(sample)
-
+    for res in results:
+        question_pairs[res["question_id"]].append(res)
+    
     category2score = defaultdict(list)
-
-    for question_id, samples in tqdm(question_pairs.items(),total = len(question_pairs)):
+    for question_id, samples in question_pairs.items():
         assert len(samples) == 2, f"Question ID {question_id} does not have a pair!"
-
-        # img = samples[0]["image"].unsqueeze(0).half().cuda()
-        category = samples[0]["category"]
-        question_1, gt_ans_1 =samples[0]["question"], samples[0]["answer"]
-        question_2, gt_ans_2 = samples[1]["question"], samples[1]["answer"]
-
-
-        gt_ans_1 = gt_ans_1.lower()
-        gt_ans_2 = gt_ans_2.lower()
-
-
-        conversation_lang_prior_1 = [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
-                        }
-                    ]
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": question_1},
-                    ],
-                },
-            ]
         
-        conversation_lang_prior_2 = [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
-                        }
-                    ]
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": question_2},
-                    ],
-                },
-            ]
-
-        conversation_1 = [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
-                        }
-                    ]
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "url": (samples[0]['image'])},
-                        {"type": "text", "text": question_1},
-                    ],
-                },
-            ]
-        conversation_2 = [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
-                        }
-                    ]
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "url": (samples[1]['image'])},
-                        {"type": "text", "text": question_2},
-                    ],
-                },
-            ]
-        
-        inputs_1 = processor.apply_chat_template(
-                conversation_1,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt"
-            ).to(distributed_state.device, torch.bfloat16)
-        # inputs_1 = {k: v.to(distributed_state.device, torch.bfloat16) for k, v in inputs_1.items()}
-        inputs_2 = processor.apply_chat_template(
-                conversation_2,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt"
-            ).to(distributed_state.device, torch.bfloat16)
-        # inputs_2 = {k: v.to(distributed_state.device, torch.bfloat16) for k, v in inputs_2.items()}
-        input_ids_lang_prior_1 = processor.apply_chat_template(
-                conversation_lang_prior_1,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt"
-            ).to(distributed_state.device, torch.bfloat16)
-        # input_ids_lang_prior_1 = {k: v.to(distributed_state.device, torch.bfloat16) for k, v in input_ids_lang_prior_1.items()}
-        input_ids_lang_prior_1 = input_ids_lang_prior_1["input_ids"]
-        input_ids_lang_prior_2 = processor.apply_chat_template(
-                conversation_lang_prior_2,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt"
-            ).to(distributed_state.device, torch.bfloat16)
-#       input_ids_lang_prior_2 = {k: v.to(distributed_state.device, torch.bfloat16) for k, v in input_ids_lang_prior_2.items()}
-        input_ids_lang_prior_2 = input_ids_lang_prior_2["input_ids"]
-
-
-        image_token_ids = BACKBONE_IMAGE_TOKEN_IDS[args.model_name]
-        image_tokens = np.where(inputs_1["input_ids"].cpu().numpy() == image_token_ids)[1]
-
-        generation_config_1 = GenerationConfigContrastive(
-            max_new_tokens=args.max_new_tokens,
-            top_p=args.top_p,
-            temperature=args.temperature,
-            do_sample=args.do_sample,
-            key_position={
-                "image_start": image_tokens[0],
-                "image_end": image_tokens[-1],
-            },
-            input_ids_lang_prior=input_ids_lang_prior_1,
-            aggregate_layer_fast_v=args.aggregate_layer_fast_v,
-            minumum_fast_v_tokens=args.minumum_fast_v_tokens,
-            aggregate_layer_text_mask=args.aggregate_layer_text_mask,
-            minimum_text_tokens=args.minimum_text_tokens,
-            lambda_lang_prior=args.lambda_lang_prior,
-            alpha_stat_bias=args.alpha_stat_bias,
-            beta_cutoff=args.beta_cutoff,
-            max_threshold_plausibility_constraint=args.max_threshold_plausibility_constraint,
-            use_cache=True,
-        )
-        with torch.no_grad():
-            output_ids = model.generate(**inputs_1, generation_config=generation_config_1)
-        output_text_1 = processor.decode(output_ids[0][len(inputs_1["input_ids"][0]):], skip_special_tokens=True) 
-        pred_ans_1 = parse_pred_ans(output_text_1)
-
-        del output_ids,inputs_1,input_ids_lang_prior_1
-        torch.cuda.empty_cache()
-        gc.collect()
-
-        image_tokens = np.where(inputs_2["input_ids"].cpu().numpy() == image_token_ids)[1]
-        generation_config_2 = GenerationConfigContrastive(
-        max_new_tokens=args.max_new_tokens,
-        top_p=args.top_p,
-        temperature=args.temperature,
-        do_sample=args.do_sample,
-        key_position={
-            "image_start": image_tokens[0],
-            "image_end": image_tokens[-1],
-        },
-        input_ids_lang_prior=input_ids_lang_prior_2,
-        aggregate_layer_fast_v=args.aggregate_layer_fast_v,
-        minumum_fast_v_tokens=args.minumum_fast_v_tokens,
-        aggregate_layer_text_mask=args.aggregate_layer_text_mask,
-        minimum_text_tokens=args.minimum_text_tokens,
-        lambda_lang_prior=args.lambda_lang_prior,
-        alpha_stat_bias=args.alpha_stat_bias,
-        beta_cutoff=args.beta_cutoff,
-        max_threshold_plausibility_constraint=args.max_threshold_plausibility_constraint,
-        use_cache=True,
-    )
-        with torch.no_grad():
-            output_ids = model.generate(**inputs_2, generation_config=generation_config_2)
-        output_text_2 = processor.decode(output_ids[0][len(inputs_2["input_ids"][0]):], skip_special_tokens=True)
-        pred_ans_2 = parse_pred_ans(output_text_2)
-
-        score_1 = 1.0 if pred_ans_1 == gt_ans_1 else 0.0
-        score_2 = 1.0 if pred_ans_2 == gt_ans_2 else 0.0
+        score_1 = 1.0 if samples[0]["pred_ans"] == samples[0]["gt_ans"] else 0.0
+        score_2 = 1.0 if samples[1]["pred_ans"] == samples[1]["gt_ans"] else 0.0
 
         acc = (score_1 + score_2) / 2 * 100.0
         acc_plus = 100.0 if score_1 == 1.0 and score_2 == 1.0 else 0.0
         question_score = acc + acc_plus
 
-        category2score[category].append(question_score)
-        del inputs_2,input_ids_lang_prior_2, output_ids
-        torch.cuda.empty_cache()
-        gc.collect()
+        category2score[samples[0]["category"]].append(question_score)
 
     category2avg_score = {category: sum(scores) / len(scores) for category, scores in category2score.items()}
-
     perception_score = sum(category2avg_score[cat] for cat in eval_type_dict["Perception"])
     cognition_score = sum(category2avg_score[cat] for cat in eval_type_dict["Cognition"])
 
-    with open(os.path.join(experiment_name,'mme_results.txt'), "a") as f:
+    with open(os.path.join(experiment_name, 'mme_results.txt'), "a") as f:
         f.write(f"{args}\n")
         f.write("=========== Perception ===========\n")
         f.write(f"total score: {perception_score:.2f}\n\n")
@@ -438,8 +349,8 @@ def run_mathvista_benchmark(model, processor, args):
                 max_threshold_plausibility_constraint=args.max_threshold_plausibility_constraint,
                 use_cache=True,
             )
-
-            output_ids = model.generate(**inputs, generation_config=generation_config)
+            with torch.no_grad():
+                output_ids = model.generate(**inputs, generation_config=generation_config)
             output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)
 
             generations.append({
@@ -553,8 +464,8 @@ def run_chair_benchmark(model, processor, args):
                 max_threshold_plausibility_constraint=args.max_threshold_plausibility_constraint,
                 use_cache=True,
             )
-
-            output_ids = model.generate(**inputs, generation_config=generation_config)
+            with torch.no_grad():
+                output_ids = model.generate(**inputs, generation_config=generation_config)
 
             output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)            
 
