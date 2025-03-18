@@ -281,7 +281,7 @@ def crops_sample(
 def patch_crops_sampling():
     transformers.generation.utils.GenerationMixin._sample = crops_sample
 
-def new_text_tokens(t,b0=40,b1=30,lamda = 0.001):
+def new_text_tokens(t,b0=10,b1=30,lamda = 0.001):
     return math.floor(b0 + b1*(1 - math.exp(-lamda*t)))
     # return math.floor(b0)
 
