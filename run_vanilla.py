@@ -5,11 +5,12 @@ from constants.default_generation_constants import (
     DEFAULT_TOP_K
 )
 
-from benchmark.evaluators.mme.utils import parse_pred_ans,eval_type_dict
 from benchmark.chair_benchmark import ChairBenchmarkDataset
+from benchmark.evaluators.mme.utils import parse_pred_ans,eval_type_dict
+from benchmark.pope_utils import POPE_PATH,POPEDataSet,GQADataset,pope_metric,recorder
 from utils.reproducibility_util import set_reproducibility
 
-from collections import defaultdict
+from collections import defaultdict,Counter
 
 import os
 import json
@@ -48,8 +49,13 @@ def args_parser():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--experiment_name", type=str, required=True)
 
+    # PoPE benchmark
+    parser.add_argument("--run_pope_benchmark",action='store_true',default=False)
+    parser.add_argument("--pope-type", type=str, default="", help="model")
+
     # Mathvista benchmark 
     parser.add_argument("--run_mathvista_benchmark",action='store_true',default=False)
+
     # MME benchmark 
     parser.add_argument("--run_mme_benchmark",action='store_true',default=False)
 
@@ -96,9 +102,84 @@ def main():
         run_mathvista_benchmark(model, processor, args)
     if args.run_mme_benchmark:
         run_mme_benchmark(model,processor,args)
+    if args.run_pope_benchmark:
+        run_pope_benchmark(model,processor,args)
+
+def run_pope_benchmark(model, processor, args):
+    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "PoPE", args.pope_type, "vanilla",args.experiment_name)
+    os.makedirs(experiment_name, exist_ok=True)
+    args.pope_path = POPE_PATH[args.pope_type]
+
+    if args.pope_type[:3] == 'gpa':
+        ds = load_dataset("lmms-lab/GQA", "val_balanced_images")
+        ds = ds['val']
+
+        pope_dataset = GQADataset(
+            pope_path=args.pope_path,
+            ds=ds,
+        )
+    else:
+        pope_dataset = POPEDataSet(
+            pope_path=args.pope_path,
+            data_path=args.coco_base_image_path
+        )
+
+    data_list = list(pope_dataset)
+    
+    with distributed_state.split_between_processes(data_list) as process_data_list:
+        pred_list, label_list = [], []
+
+        for sample in tqdm(process_data_list, total=len(process_data_list), desc=f"Running PoPE Benchmark. Process: {distributed_state.process_index}"):
+            image = sample["image"]
+            question = sample["query"]
+            label = sample["label"]
+            
+            label_list.append(label)
+
+            conversation = [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."}
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "url": image},
+                        {"type": "text", "text": question},
+                    ],
+                },
+            ]
+            
+            inputs = processor.apply_chat_template(
+                conversation,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt"
+            ).to(distributed_state.device, torch.bfloat16)
+
+            generation_config = GenerationConfig(
+                max_new_tokens=args.max_new_tokens,
+                top_p=args.top_p,
+                temperature=args.temperature,
+                do_sample=args.do_sample,
+                use_cache=True,
+            )
+            
+            with torch.no_grad():
+                output_ids = model.generate(**inputs, generation_config=generation_config)
+            output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)
+            pred_list = recorder([output_text], pred_list)
+
+        results_path = os.path.join(experiment_name, 'results.txt')
+        
+        if pred_list:
+            pope_metric(pred_list, label_list, results_path)
 
 def run_mme_benchmark(model, processor, args):
-    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS", "MME")
+    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "vanilla", "MME")
     os.makedirs(experiment_name, exist_ok=True)
 
     mme_dataset = load_dataset("darkyarding/MME")["test"]
@@ -197,7 +278,7 @@ def run_mme_benchmark(model, processor, args):
     print("Evaluation complete. Results saved to 'mme_results.txt'.")
 
 def run_mathvista_benchmark(model, processor, args):
-    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS", "MathVista")
+    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "vanilla", "MathVista")
     os.makedirs(experiment_name, exist_ok=True)
 
     data_list = load_dataset('AI4Math/MathVista', split='testmini')
@@ -314,13 +395,24 @@ def run_chair_benchmark(model, processor, args):
                 do_sample=args.do_sample,
                 use_cache=True,
             )
-
             # # Extract token IDs
             # token_ids = inputs["input_ids"].tolist()[0]  # Convert tensor to list
 
             # # Convert token IDs to actual tokens
             # tokens = processor.tokenizer.convert_ids_to_tokens(token_ids)
-            # print(tokens)
+
+            # # Count frequency of each token
+            # token_counts = Counter(token_ids)
+            # most_common_token_id, most_common_count = token_counts.most_common(1)[0]  # Get most repeated token
+
+            # # Convert token ID back to its string representation
+            # most_common_token = processor.tokenizer.convert_ids_to_tokens(most_common_token_id)
+
+            # # Print results
+            # print(f"Tokenized input: {tokens}")
+            # print(f"Most repeated token ID: {most_common_token_id}")
+            # print(f"Most repeated token: {most_common_token}")
+            # print(f"Count: {most_common_count}")
 
             output_ids = model.generate(**inputs, generation_config=generation_config)
 
