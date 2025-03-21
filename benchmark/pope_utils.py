@@ -47,10 +47,11 @@ class POPEDataSet(Dataset):
 
     def __getitem__(self, index):
         image_path = os.path.join(self.data_path, self.image_list[index])
+        image = Image.open(image_path).convert("RGB")
         query = self.query_list[index]
         label = self.label_list[index]
 
-        return {"image": image_path, "query": query, "label": label}
+        return {"image": image, "query": query, "label": label}
 
 class GQADataset(Dataset):
     def __init__(self, pope_path, ds):
