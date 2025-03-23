@@ -275,9 +275,9 @@ def run_shr_benchmark(model,processor,args):
         _gram3 += gram3
         _gram4 += gram4
             
-        # skip gpt judgement 
-        if args.no_gpt_judge:
-            continue
+        # # skip gpt judgement 
+        # if args.no_gpt_judge:
+        #     continue
             
         factual_text = ""
         if str(image_id) in factual_inf:

@@ -3,6 +3,7 @@ datasets
 bitsandbytes==0.45.3
 nltk
 numpy
+openai==0.28.1
 pillow
 torch==2.6.0
 torchvision==0.21.0

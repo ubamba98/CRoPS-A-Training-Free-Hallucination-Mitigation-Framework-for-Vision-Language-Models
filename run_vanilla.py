@@ -175,7 +175,7 @@ def run_shr_benchmark(model,processor,args):
                 "role": "user",
                 "content": [
                     {"type": "image", "url": image},
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": 'Describe this image in detail.'},
                 ],
             },
         ]
@@ -215,10 +215,6 @@ def run_shr_benchmark(model,processor,args):
         _gram2 += gram2
         _gram3 += gram3
         _gram4 += gram4
-            
-        # skip gpt judgement 
-        if args.no_gpt_judge:
-            continue
             
         factual_text = ""
         if str(image_id) in factual_inf:
