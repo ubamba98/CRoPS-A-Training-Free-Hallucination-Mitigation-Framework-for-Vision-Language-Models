@@ -275,9 +275,6 @@ def run_shr_benchmark(model,processor,args):
         _gram3 += gram3
         _gram4 += gram4
             
-        # # skip gpt judgement 
-        # if args.no_gpt_judge:
-        #     continue
             
         factual_text = ""
         if str(image_id) in factual_inf:
@@ -304,35 +301,35 @@ def run_shr_benchmark(model,processor,args):
                 "model_response": output_text,
                 "judgement": final_judge,
             }
-    if args.no_gpt_judge:
-        print(f"gram-1 repetition: {round(_gram1/len(val_images), 3)}")
-        print(f"gram-2 repetition: {round(_gram2/len(val_images), 3)}")
-        print(f"gram-3 repetition: {round(_gram3/len(val_images), 3)}")
-        print(f"gram-4 repetition: {round(_gram4/len(val_images), 3)}")
-    else:
+    # if args.no_gpt_judge:
+    #     print(f"gram-1 repetition: {round(_gram1/len(val_images), 3)}")
+    #     print(f"gram-2 repetition: {round(_gram2/len(val_images), 3)}")
+    #     print(f"gram-3 repetition: {round(_gram3/len(val_images), 3)}")
+    #     print(f"gram-4 repetition: {round(_gram4/len(val_images), 3)}")
+    # else:
         # save metrics
-        metrics = {}
-        for run in run_all:
-            metrics[run] = {}
-            get_metric(judgement[run], metrics[run])
-        # repetition
-        metrics['gram-1-repetition'] = round(_gram1/len(val_images), 3)
-        metrics['gram-2-repetition'] = round(_gram2/len(val_images), 3)
-        metrics['gram-3-repetition'] = round(_gram3/len(val_images), 3)
-        metrics['gram-4-repetition'] = round(_gram4/len(val_images), 3)
-        # halucination ratio
-        metrics["mean_hal_ratio"] = round(
-            sum(metrics[run]["hal_sents_ratio"] for run in run_all)/len(run_all), 3
-        )
-        metrics["model_base"] = args.model
-        print("judgement :- ",judgement)
-        print("metrics :- ",metrics)
-        # dump judgement file
-        with open(os.path.join(experiment_name, 'judgement.json'), "w") as f:
-            json.dump(judgement, f)
-        # dump metric file
-        with open(os.path.join(experiment_name, 'metrics.json'), "w") as f:
-            json.dump(metrics, f)
+    metrics = {}
+    for run in run_all:
+        metrics[run] = {}
+        get_metric(judgement[run], metrics[run])
+    # repetition
+    metrics['gram-1-repetition'] = round(_gram1/len(val_images), 3)
+    metrics['gram-2-repetition'] = round(_gram2/len(val_images), 3)
+    metrics['gram-3-repetition'] = round(_gram3/len(val_images), 3)
+    metrics['gram-4-repetition'] = round(_gram4/len(val_images), 3)
+    # halucination ratio
+    metrics["mean_hal_ratio"] = round(
+        sum(metrics[run]["hal_sents_ratio"] for run in run_all)/len(run_all), 3
+    )
+    metrics["model_base"] = args.model
+    print("judgement :- ",judgement)
+    print("metrics :- ",metrics)
+    # dump judgement file
+    with open(os.path.join(experiment_name, 'judgement.json'), "w") as f:
+        json.dump(judgement, f)
+    # dump metric file
+    with open(os.path.join(experiment_name, 'metrics.json'), "w") as f:
+        json.dump(metrics, f)
 
 
 def run_mmmu_benchmark(model,processor,args):
