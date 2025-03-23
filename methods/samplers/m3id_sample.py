@@ -157,7 +157,7 @@ def m3id_sample(
             final_logits = next_token_logits
         else:
             log_probs_next_token_lang_prior = torch.log_softmax(next_token_logits_lang_prior, dim=-1)
-            gamma_lang_prior = math.exp(-lambda_lang_prior * time_step)
+            gamma_lang_prior = math.exp(-lambda_lang_prior * (time_step))
             
             # Remove Language Prior
             final_logits = log_probs_next_token + \

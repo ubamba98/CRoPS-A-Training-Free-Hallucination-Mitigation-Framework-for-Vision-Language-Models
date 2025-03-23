@@ -8,6 +8,7 @@ from constants.default_generation_constants import (
 from benchmark.chair_benchmark import ChairBenchmarkDataset
 from benchmark.evaluators.mme.utils import parse_pred_ans,eval_type_dict
 from benchmark.pope_utils import POPE_PATH,POPEDataSet,GQADataset,pope_metric,recorder
+from benchmark.mmmu_utils import CAT_SHORT2LONG,construct_prompt,process_single_sample,parse_multi_choice_response,evaluate_mmmu
 from utils.reproducibility_util import set_reproducibility
 
 from collections import defaultdict,Counter
@@ -27,7 +28,7 @@ from transformers import (
     BitsAndBytesConfig
 )
 from transformers import logging
-from datasets import load_dataset
+from datasets import load_dataset,concatenate_datasets
 logging.set_verbosity_error()
 
 distributed_state = PartialState()
@@ -48,6 +49,10 @@ def args_parser():
     # Evaluation config
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--experiment_name", type=str, required=True)
+
+    # MMMU benchmark
+    parser.add_argument("--run_mmmu_benchmark",action='store_true',default=False)
+    parser.add_argument("--mmmu_answer_file_path",type=str,default='benchmark/evaluators/mmmu/answer_dict_val.json')
 
     # PoPE benchmark
     parser.add_argument("--run_pope_benchmark",action='store_true',default=False)
@@ -104,6 +109,74 @@ def main():
         run_mme_benchmark(model,processor,args)
     if args.run_pope_benchmark:
         run_pope_benchmark(model,processor,args)
+    if args.run_mmmu_benchmark:
+        run_mmmu_benchmark(model,processor,args)
+
+def run_mmmu_benchmark(model,processor,args):
+    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "MMMU", "vanilla",args.experiment_name)
+    os.makedirs(experiment_name, exist_ok=True)
+    sub_dataset_list = []
+    for subject in CAT_SHORT2LONG.values():
+        sub_dataset = load_dataset("MMMU/MMMU", subject, split='validation')
+        sub_dataset_list.append(sub_dataset)
+
+    dataset = concatenate_datasets(sub_dataset_list)
+
+    data_list = list(dataset)
+    
+    with distributed_state.split_between_processes(data_list) as process_data_list:
+        out_samples = dict()
+        for sample in tqdm(process_data_list, total=len(process_data_list), desc=f"Running MMMU Benchmark. Process: {distributed_state.process_index}"):
+            sample = process_single_sample(sample)
+            sample = construct_prompt(sample)
+
+            prompt = sample['final_input_prompt']
+            image = sample['image']
+            conversation = [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."}
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "url": image},
+                        {"type": "text", "text": prompt},
+                    ],
+                },
+            ]
+            
+            inputs = processor.apply_chat_template(
+                conversation,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt"
+            ).to(distributed_state.device, torch.bfloat16)
+
+            generation_config = GenerationConfig(
+                max_new_tokens=args.max_new_tokens,
+                top_p=args.top_p,
+                temperature=args.temperature,
+                do_sample=args.do_sample,
+                use_cache=True,
+            )
+            
+            with torch.no_grad():
+                output_ids = model.generate(**inputs, generation_config=generation_config)
+            output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)              
+            pred_ans = output_text
+            out_samples[sample['id']] = pred_ans
+
+    output_path = os.path.join(experiment_name,'mmmu_answers.json')
+    with open(output_path, 'w') as f:
+        json.dump(out_samples, f, indent=4)
+
+    results = evaluate_mmmu(output_path,args.mmmu_answer_file_path)
+    with open(os.path.join(experiment_name, 'evaluation_results.json'), 'w') as f:
+        json.dump(results, f, indent=4)
 
 def run_pope_benchmark(model, processor, args):
     experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "PoPE", args.pope_type, "vanilla",args.experiment_name)

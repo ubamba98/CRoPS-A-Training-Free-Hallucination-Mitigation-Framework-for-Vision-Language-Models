@@ -149,7 +149,7 @@ def sid_sample(
 
         probs_next_token = torch.softmax(next_token_logits, dim=-1)
         # Remove Stat Bias
-        if probs_next_token.max(dim=-1, keepdim=True).values > 0.1:
+        if probs_next_token.max(dim=-1, keepdim=True).values > 0.3:
             final_logits = next_token_logits
         else:
             final_logits = (1+alpha_stat_bias) * next_token_logits - alpha_stat_bias * next_token_logits_stat_bias
