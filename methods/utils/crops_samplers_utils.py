@@ -13,6 +13,8 @@ def get_generations(self,
                                                       pixel_values=pixel_values, 
                                                       **model_kwargs)
 
+    rope_deltas = model_kwargs.get("rope_deltas",None)
+    model_inputs.update({"rope_deltas": rope_deltas}if rope_deltas is not None else {})
     # prepare variable output controls (note: some models won't accept all output controls)
     model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
     model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
@@ -32,6 +34,9 @@ def get_generations(self,
         minimum_text_tokens=generation_config.minimum_text_tokens,
     )
 
+    if ('rope_deltas' in outputs) and ('rope_deltas' not in model_kwargs):
+        model_kwargs['rope_deltas'] = outputs['rope_deltas']
+
     # synced_gpus: don't waste resources running the code we don't need; kwargs must be updated before skipping
     model_kwargs = self._update_model_kwargs_for_generation(
         outputs,
@@ -39,6 +44,7 @@ def get_generations(self,
         is_encoder_decoder=self.config.is_encoder_decoder,
     )
     return outputs, model_kwargs
+
 
 def get_next_token_logits(outputs, input_ids):
     # Clone is needed to avoid keeping a hanging ref to outputs.logits which may be very large for first iteration

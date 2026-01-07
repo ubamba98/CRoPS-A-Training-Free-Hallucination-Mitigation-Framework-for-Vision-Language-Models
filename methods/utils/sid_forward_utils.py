@@ -1,15 +1,11 @@
 import torch
-import json
-class GetAttentionMaskwithFastVandTextMask:
+class GetAttentionMaskwithFastV:
     def __init__(self,
                 attention_mask: torch.Tensor,
                 key_position: dict,
                 use_fast_v: bool,
                 aggregate_layer_fast_v: int,
-                minumum_fast_v_tokens: int,
-                use_text_mask: bool,
-                aggregate_layer_text_mask: int,
-                minimum_text_tokens: int,
+                minumum_fast_v_tokens: int
                 ):
         
         self._attention_mask = attention_mask
@@ -20,31 +16,22 @@ class GetAttentionMaskwithFastVandTextMask:
         self._use_fast_v = use_fast_v
         self._aggregate_layer_fast_v = aggregate_layer_fast_v
 
-        # Text Mask
-        self._use_text_mask = use_text_mask
-        self._aggregate_layer_text_mask = aggregate_layer_text_mask
-
-        if self._use_fast_v or self._use_text_mask:
+        if self._use_fast_v:
             self._image_start = key_position['image_start']
             self._image_token_length = key_position['image_end'] - self._image_start + 1
             self._minumum_fast_v_tokens = round((0.25)*(self._image_token_length))
 
         if self._use_fast_v:
             assert self._aggregate_layer_fast_v > 0, "aggregate_layer_fast_v must be greater than 0"
-        if self._use_text_mask:
-            assert self._aggregate_layer_text_mask > 0, "aggregate_layer_text_mask must be greater than 0"
-            assert self._minimum_text_tokens > 0, "minimum_text_tokens must be greater than 0"
 
     def __call__(self, all_self_attns):
         if self._use_fast_v and self._curr_layer_num == self._aggregate_layer_fast_v:
             self._update_fast_v_attention_mask(all_self_attns[-1])
-        
-        if self._use_text_mask and self._curr_layer_num == self._aggregate_layer_text_mask:
-            self._update_text_attention_mask(all_self_attns[-1])
 
         self._curr_layer_num += 1
 
         return self._attention_mask
+
 
     def _update_fast_v_attention_mask(self, last_layer_attention):
         # compute average attention over different head
@@ -66,19 +53,3 @@ class GetAttentionMaskwithFastVandTextMask:
         fast_v_attention_mask[:, top_attention_rank_index] = True
 
         self._attention_mask = fast_v_attention_mask
-
-    ## Inputs should only contain text tokens
-    def _update_text_attention_mask(self, last_layer_attention):
-        last_layer_attention_avg = torch.mean(last_layer_attention, dim=1)[0]
-        last_tok_attn = last_layer_attention_avg[-1]
-
-        total_active = int(self._attention_mask.sum().item())
-        k = int(self._minimum_text_tokens) if total_active > self._minimum_text_tokens else total_active
-
-        topk = last_tok_attn.topk(k, largest=False)
-        keep_idx = topk.indices
-
-        text_mask = torch.zeros_like(self._attention_mask, dtype=torch.bool)
-        text_mask[:, keep_idx] = True
-
-        self._attention_mask = text_mask

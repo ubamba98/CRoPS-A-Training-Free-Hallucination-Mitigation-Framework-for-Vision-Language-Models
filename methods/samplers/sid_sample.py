@@ -1,11 +1,9 @@
 import math
 import copy
-import numpy as np
 from typing import Optional, Union
 
 import torch
 from torch import nn
-import torch.nn.functional as F
 
 from transformers.generation.logits_process import (
     LogitsProcessorList,
@@ -24,19 +22,7 @@ from transformers.generation.streamers import BaseStreamer
 from methods.generation_configs.contrastive_generation_config import GenerationConfigContrastive
 from methods.utils.crops_samplers_utils import get_generations, get_next_token_logits
 
-
-_jsd_log_path = "jsd_values_2.npy"
-def _jensen_shannon(p_logits: torch.Tensor, q_logits: torch.Tensor, eps: float = 1e-12) -> float:
-    p = F.softmax(p_logits, dim=-1).clamp(min=eps)
-    q = F.softmax(q_logits, dim=-1).clamp(min=eps)
-    m = 0.5 * (p + q)
-    kl_pm = (p * (p.log() - m.log())).sum(dim=-1)
-    kl_qm = (q * (q.log() - m.log())).sum(dim=-1)
-    jsd = 0.5 * (kl_pm + kl_qm)
-    # assume batch_size=1 → scalar
-    return jsd.item()
-
-def crops_sample(
+def sid_sample(
     self,
     input_ids: torch.LongTensor,
     logits_processor: LogitsProcessorList,
@@ -107,33 +93,21 @@ def crops_sample(
     pixel_values = model_kwargs.pop("pixel_values", None)
     key_position = generation_config.key_position
 
-    # Lang Prior
-    model_kwargs_lang_prior = copy.deepcopy(model_kwargs)
-    input_ids_lang_prior = generation_config.input_ids_lang_prior
-    lambda_lang_prior = generation_config.lambda_lang_prior
-
-    ## Update attention mask for lang prior
-    model_kwargs_lang_prior["attention_mask"] = torch.ones_like(input_ids_lang_prior)
-
     # Stat Bias
     model_kwargs_stat_bias = copy.deepcopy(model_kwargs)
     alpha_stat_bias = generation_config.alpha_stat_bias
 
     # Other
-    jsd_vals = []
-    time_step = 1
-    beta_cutoff = torch.tensor(generation_config.beta_cutoff)
-    max_threshold_plausibility_constraint = torch.tensor(
-        generation_config.max_threshold_plausibility_constraint
-    )
+    beta_cutoff = torch.tensor(generation_config.beta_cutoff) 
     
     # keep track of which sequences are already finished
     batch_size, cur_len = input_ids.shape
     this_peer_finished = False
     unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
 
+    time_step = 0
+
     model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
-    model_kwargs_lang_prior = self._get_initial_cache_position(input_ids_lang_prior, model_kwargs_lang_prior)
     model_kwargs_stat_bias = self._get_initial_cache_position(input_ids, model_kwargs_stat_bias)
 
     while self._has_unfinished_sequences(
@@ -156,26 +130,7 @@ def crops_sample(
 
         next_token_logits = get_next_token_logits(outputs, input_ids)
 
-        generation_config.minimum_text_tokens = new_text_tokens(time_step)
-
-        # logits with Language Prior
-        outputs_lang_prior, model_kwargs_lang_prior = get_generations(self,
-                                                input_ids_lang_prior,
-                                                pixel_values=None,
-                                                model_kwargs=model_kwargs_lang_prior,
-                                                generation_config=generation_config,
-                                                key_position=key_position, 
-                                                use_text_mask=True,
-                                                use_fast_v=False,
-                                                output_attentions=output_attentions, 
-                                                output_hidden_states=output_hidden_states)
-
-        if synced_gpus and this_peer_finished:
-            continue
-
-        next_token_logits_lang_prior = get_next_token_logits(outputs_lang_prior, input_ids_lang_prior)
-
-        # # # logits with Stat Bias
+        # logits with Stat Bias
         outputs_stat_bias, model_kwargs_stat_bias = get_generations(self,
                                                 input_ids, 
                                                 pixel_values=pixel_values,
@@ -191,26 +146,12 @@ def crops_sample(
             continue
 
         next_token_logits_stat_bias = get_next_token_logits(outputs_stat_bias, input_ids) 
+        # Remove Stat Bias
+        final_logits = (1+alpha_stat_bias) * next_token_logits - alpha_stat_bias * next_token_logits_stat_bias
 
         # Apply cutoff threshold
         cutoff_th = torch.log(beta_cutoff) + next_token_logits.max(dim=-1, keepdim=True).values
-        next_token_logits = next_token_logits.masked_fill(next_token_logits<cutoff_th,-float("inf"))
-
-        log_probs_next_token = torch.log_softmax(next_token_logits, dim=-1)
-        probs_next_token = torch.softmax(next_token_logits, dim=-1)
-
-        if probs_next_token.max(dim=-1, keepdim=True).values > max_threshold_plausibility_constraint:
-            final_logits = next_token_logits
-        else:
-            log_probs_next_token_lang_prior = torch.log_softmax(next_token_logits_lang_prior, dim=-1)
-            log_probs_next_token_stat_bias = torch.log_softmax(next_token_logits_stat_bias, dim=-1)
-            gamma_lang_prior = math.exp(-lambda_lang_prior * time_step)
-            # Remove Language Prior
-            final_logits = log_probs_next_token + \
-                (1-gamma_lang_prior)/gamma_lang_prior * (log_probs_next_token - log_probs_next_token_lang_prior)
-
-            # # # # # # # # Remove Stat Bias
-            final_logits = (1+alpha_stat_bias) * final_logits - alpha_stat_bias * log_probs_next_token_stat_bias
+        final_logits = final_logits.masked_fill(next_token_logits<cutoff_th,-float("inf"))
 
         time_step += 1
 
@@ -251,7 +192,6 @@ def crops_sample(
 
         # update generated ids, model inputs, and length for next step
         input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
-        input_ids_lang_prior = torch.cat([input_ids_lang_prior, next_tokens[:, None]], dim=-1)
 
         if streamer is not None:
             streamer.put(next_tokens.cpu())
@@ -262,7 +202,7 @@ def crops_sample(
 
         # This is needed to properly delete outputs.logits which may be very large for first iteration
         # Otherwise a reference to outputs is kept which keeps the logits alive in the next iteration
-        del outputs, outputs_lang_prior, outputs_stat_bias
+        del outputs, outputs_stat_bias
 
     if streamer is not None:
         streamer.end()
@@ -292,8 +232,5 @@ def crops_sample(
     else:
         return input_ids
 
-def patch_crops_sampling():
-    transformers.generation.utils.GenerationMixin._sample = crops_sample
-
-def new_text_tokens(t,b0= 10, b1=30, lamb=0.001):
-    return math.floor(b0 + b1 * (1 - math.exp(-lamb * t)))
+def patch_sid_sampling():
+    transformers.generation.utils.GenerationMixin._sample = sid_sample
